@@ -1,0 +1,64 @@
+# CAN acceptance-filter audit stack.
+#
+# Host ports and health-check behaviour are configurable through the
+# environment (see .env.example):
+#   WEB_PORT                  host port for the web UI         (default 8080)
+#   API_PORT                  host port for the FastAPI API    (default 8000)
+#   HEALTH_INTERVAL/TIMEOUT/RETRIES/START_PERIOD
+#
+# Acceptance:
+#   docker compose --profile acceptance run --rm verify
+#
+services:
+  api:
+    build:
+      context: ./backend
+    environment:
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "${API_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=3); assert json.load(r)['status']=='ok'"
+      interval: ${HEALTH_INTERVAL:-30s}
+      timeout: ${HEALTH_TIMEOUT:-5s}
+      retries: ${HEALTH_RETRIES:-3}
+      start_period: ${HEALTH_START_PERIOD:-10s}
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./frontend
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: ${HEALTH_INTERVAL:-30s}
+      timeout: ${HEALTH_TIMEOUT:-5s}
+      retries: ${HEALTH_RETRIES:-3}
+      start_period: ${HEALTH_START_PERIOD:-5s}
+    restart: unless-stopped
+
+  # Executable acceptance service: builds, waits for the stack to become
+  # healthy, then runs solver unit tests + end-to-end black-box checks and
+  # exits non-zero on any failure.
+  verify:
+    profiles: ["acceptance"]
+    build:
+      context: .
+      dockerfile: acceptance/Dockerfile
+    environment:
+      WEB_URL: http://web
+      API_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    restart: "no"
